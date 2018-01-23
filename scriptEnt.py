@@ -61,17 +61,16 @@ def changeEdge(graph, Negative, Positive,viewColor):
 def NodePosition(graph, viewLayout):
   # Apply an FM^3 layout on it
   fm3pParams = tlp.getDefaultPluginParameters("FM^3 (OGDF)", graph)
-  fm3pParams["Unit edge length"] = 200
+#  fm3pParams["Unit edge length"] = 200
   graph.applyLayoutAlgorithm("FM^3 (OGDF)", viewLayout, fm3pParams)
  
-  size = 200
   #for n in graph.getNodes():
    # x = random.random() * size
    # y = random.random() * size
    # viewLayout[n] = tlp.Coord(x, y, 0)
 
 
-def geneClustering(graph, all_tp, similarityFct, seuils=[0, 0.01]):
+def geneClustering(graph, all_tp, similarityFct, seuil):
   
   # creation ou reinitialisation du graph de correlation portant le seuil dans son nom
   graph_correlation_name = "correlation_{}".format(similarityFct.__name__)
@@ -79,27 +78,31 @@ def geneClustering(graph, all_tp, similarityFct, seuils=[0, 0.01]):
   
   
   # Supression de toutes les arretes
+  print("Supression des aretes du graphe ",graph_correlation_name)
   correlation_graph.delEdges(correlation_graph.getEdges())
   
   # creation de la doubleProperty "correlation" permettant d'enregistrer 
   # la correlation entre chaque gene au niveau des arretes
   
   
-  similarity_prop = computeCorrelation(correlation_graph, all_tp, similarityFct, seuils)
-  print similarity_prop
+  similarity_prop = computeCorrelation(correlation_graph, all_tp, similarityFct, seuil)
+  print(similarity_prop)
+  
   
   clusteringMCL(correlation_graph, similarity_prop )
   
   return correlation_graph
 
-def computeCorrelation(graph, all_tp, similarityFct, seuils):
+def computeCorrelation(graph, all_tp, similarityFct, seuil):
 
 
-  correlation_properties = {}
-  for s in seuils:
-    correlation_properties[s] =  graph.getDoubleProperty("correlation_{}".format(s))
+#  correlation_properties = {}
+#  for s in seuils:
+#    correlation_properties[s] =  graph.getDoubleProperty("correlation_{}".format(s))
      
-  correlation_value = graph.getDoubleProperty("correlation_".format(similarityFct.__name__))
+  correlation_value = graph.getDoubleProperty("correlation_{}_{}".format(similarityFct.__name__, seuil))
+  
+  
   nannodes = []
   treated_node = []
   cpt = 0
@@ -149,15 +152,25 @@ def computeCorrelation(graph, all_tp, similarityFct, seuils):
 #      print('jk', jk)
       
       #Add edge between node A and node B
-      edge = graph.addEdge(nodeA, nodeB)
-      correlation_value[edge] = result
-      for s in correlation_properties:
-        if result < s:
-          continue
-        correlation_properties[s][edge] = result
-    break
+#      edge = graph.addEdge(nodeA, nodeB)
+#      correlation_value[edge] = result
+      
+      if result > seuil:
+        edge = graph.addEdge(nodeA, nodeB)
+        correlation_value[edge] = result
+        
+        
+#      for s in correlation_properties:
+#        if result > s:
+#          edge = graph.addEdge(nodeA, nodeB)
+#          correlation_value[edge] = result
+#          
+#          
+#          correlation_properties[s][edge] = result
+#          continue
+#        correlation_properties[s][edge] = result
 
-  return correlation_properties
+  return {seuil:correlation_value}
 
 
 
@@ -234,13 +247,25 @@ def clusteringMCL(graph, similarity_prop):
 
   
     resultMetric = graph.getDoubleProperty('resultMetric_{}'.format(s))
+    print("apply MCL over resultMetric_{}".format(s))
     success = graph.applyDoubleAlgorithm('MCL Clustering', resultMetric, params)
+    print("MCL clustering is over", success)
   
-  
+def writeClusters(graph, grp_metric, prop_to_write, nb_gene_threshold = 10):
+  clusters = getClusters(graph, grp_metric)
+  print(clusters.keys())
+  for c in clusters:
+    if len(clusters[c]) <  nb_gene_threshold:
+      continue
+    with open("Cluster_{}.txt".format(c), "w") as fl:
+      for n in clusters[c]:
+        fl.write(prop_to_write[n]+"\n")
+        
+
 def getClusters(graph, metric):
   clusters = {}
   for n in graph.getNodes():
-    print(metric[n])
+#    print(metric[n])
     try:
       clusters[metric[n]].append(n)
     except:
@@ -255,7 +280,7 @@ def buildHeatMap(graph, heatmap, all_tp, cluster_metric):
   viewBorderColor = graph.getColorProperty("viewBorderColor")
   
   clusters = getClusters(graph, cluster_metric)
-  print clusters
+  print(clusters)
   # Recherche de la valeur d'expression min et max pour l'intensitÃ© de couleur du heatmap
   # On met graph en parametre pour bien prendre en compte seulement les niveaux d'expression du graph pour lequel on fait le heatmap
   # Si jamais on a filtrÃ© ce graph lÃ , le max ou min peut diffÃ©rer du graph original
@@ -394,27 +419,46 @@ def main(graph):
   
  
   
-  label(graph, Locus, viewLabel)
-  setSize(graph, viewSize)
-  changeEdge(graph, Negative, Positive, viewColor)
-  NodePosition(graph, viewLayout)
-
+  label(working, Locus, viewLabel)
+  setSize(working, viewSize)
+  changeEdge(working, Negative, Positive, viewColor)
+  NodePosition(working, viewLayout)
+    
+    
+  cosineScipy = spatial.distance.cosine
 
 #  correlation_graph = geneClustering(graph, all_tp, similarityFct=jackknife,  seuils = [0.4,0.5,0.6,0.7,0.8])
   
 #  correlation_graph = geneClustering(graph, all_tp, similarityFct=cosineSimilarity,  seuils = [0, 0.5, 0.8, 0.95, 0.99, 0.98, 0.995])
   
+  correlation_graph = geneClustering(graph, all_tp, similarityFct=cosineSimilarity,  seuil=0.8)
+  
+  
   
   correlation_graph = graph.getSubGraph("correlation_jackknife")
-  
-  
-  similarity_prop = {0.6:correlation_graph.getDoubleProperty("correlation_O.6")}
-  clusteringMCL(graph, similarity_prop)
+
+#  
+#  seuils = [0.8]  #[0, 0.5, 0.8, 0.95, 0.99, 0.98, 0.995]
+#  similarity_prop = {}
+#  for s in seuils:
+#    similarity_prop[s] = correlation_graph.getDoubleProperty("correlation_{}".format(s))
+    
+#  similarity_prop = {0.995:correlation_graph.getDoubleProperty("correlation_O.995")}
+
+#  clusteringMCL(graph, similarity_prop)
+
   cluster_metric = correlation_graph.getDoubleProperty("resultMetric_0.8")
 
-  buildHeatMap(correlation_graph, heatmap, all_tp, cluster_metric)
+#  buildHeatMap(correlation_graph, heatmap, all_tp, cluster_metric)
   
   
+  
+  writeClusters(correlation_graph, cluster_metric, Locus)
+  
+  fl = open("test.txt", "w")
+  
+  
+  fl.write("")
   print('end')
   #working = graph.addCloneSubGraph("working")
   #clone = graph.addCloneSubGraph("clone")
