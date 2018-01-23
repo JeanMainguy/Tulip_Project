@@ -277,7 +277,7 @@ def buildHeatMap(graph, heatmap, all_tp, cluster_metric):
   yi = 0
   
   for c in clusters:
-    
+    yi += 20
     for n in clusters[c]:
       yi += y_step
       
