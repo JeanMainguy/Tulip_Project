@@ -19,6 +19,7 @@ import random
 import numpy as np
 from scipy import spatial
 from math import sqrt
+from numpy import median, percentile
 
 
 # The updateVisualization(centerViews = True) function can be called
@@ -72,7 +73,7 @@ def NodePosition(graph, viewLayout):
 
 def geneClustering(graph, all_tp, similarityFct, seuil):
   
-  # creation ou reinitialisation du graph de correlation portant le seuil dans son nom
+  # creation ou reinitialisation du graph de correlation 
   graph_correlation_name = "correlation_{}".format(similarityFct.__name__)
   correlation_graph = reinitializeSubgraph(graph, graph_correlation_name)
   
@@ -93,21 +94,31 @@ def geneClustering(graph, all_tp, similarityFct, seuil):
   
   return correlation_graph
 
-def computeCorrelation(graph, all_tp, similarityFct, seuil):
 
+
+def computeSimilarity(similarity_graph, all_tp, similarityFct):
+  """
+  parametres:
+    similarity_graph: graph qui va contenir toutes les aretes entre chaque neouds portant une valeur de similarité pour leurs niveau d'exression
+    all_tp :dictionnaire des propriété des niveaux d'expression à chaque temps
+    similarityFct: function calculant une similarité entre deux liste de valeur. Peut correspondre à la fonction cosineSimilarity, jackknife ou pearson 
+  """
 
 #  correlation_properties = {}
 #  for s in seuils:
 #    correlation_properties[s] =  graph.getDoubleProperty("correlation_{}".format(s))
      
-  correlation_value = graph.getDoubleProperty("correlation_{}_{}".format(similarityFct.__name__, seuil))
+  correlation_value = similarity_graph.getDoubleProperty("correlation_{}".format(similarityFct.__name__))
   
   
   nannodes = []
   treated_node = []
-  cpt = 0
-  nodes = list(graph.getNodes())
-  for nodeA in graph.getNodes():
+  cpt = 0.0
+  step = 0
+  nodes = list(similarity_graph.getNodes())
+  nb_node = len(nodes)
+  print("nb node", nb_node)
+  for nodeA in similarity_graph.getNodes():
     try:
       nodes.remove(nodeA)
     except ValueError:
@@ -119,11 +130,10 @@ def computeCorrelation(graph, all_tp, similarityFct, seuil):
     
     if sum(exprA) == 0:
       nannodes.append(nodeA)
-      graph.delNode(nodeA)
+      similarity_graph.delNode(nodeA)
       continue 
     
-    cpt += 1
-    print(cpt)
+
 
     for nodeB in nodes:
       exprB = []
@@ -133,7 +143,7 @@ def computeCorrelation(graph, all_tp, similarityFct, seuil):
     
       if sum(exprB) == 0:
         nannodes.append(nodeB)
-        graph.delNode(nodeB)
+        similarity_graph.delNode(nodeB)
         nodes.remove(nodeB)
         continue
        
@@ -152,12 +162,19 @@ def computeCorrelation(graph, all_tp, similarityFct, seuil):
 #      print('jk', jk)
       
       #Add edge between node A and node B
-#      edge = graph.addEdge(nodeA, nodeB)
-#      correlation_value[edge] = result
+      edge = similarity_graph.addEdge(nodeA, nodeB)
+      correlation_value[edge] = result
       
-      if result > seuil:
-        edge = graph.addEdge(nodeA, nodeB)
-        correlation_value[edge] = result
+    
+#    print(float(cpt)/nb_node)
+    if cpt/nb_node >= step:
+      print("{}% de la mesure de similarity".format(int(step)*100))
+      step += 0.05
+    cpt += 1
+      
+#      if result > seuil:
+#        edge = similarity_graph.addEdge(nodeA, nodeB)
+#        correlation_value[edge] = result
         
         
 #      for s in correlation_properties:
@@ -170,7 +187,8 @@ def computeCorrelation(graph, all_tp, similarityFct, seuil):
 #          continue
 #        correlation_properties[s][edge] = result
 
-  return {seuil:correlation_value}
+#  return {seuil:correlation_value}
+  return correlation_value
 
 
 
@@ -239,19 +257,20 @@ def pearson(v1, v2, jk_flag = False):
   return numerator/denominator
 
 
-def clusteringMCL(graph, similarity_prop):
+def clusteringMCL(graph, weight_prop):
   params = tlp.getDefaultPluginParameters('MCL Clustering', graph)
   
-  for s in similarity_prop:
-    params['weights'] = similarity_prop[s]
+  params['weights'] = weight_prop
 
   
-    resultMetric = graph.getDoubleProperty('resultMetric_{}'.format(s))
-    print("apply MCL over resultMetric_{}".format(s))
-    success = graph.applyDoubleAlgorithm('MCL Clustering', resultMetric, params)
-    print("MCL clustering is over", success)
+  resultMetric = graph.getDoubleProperty('cluster')
+  print("MCL clustering start")
+  success = graph.applyDoubleAlgorithm('MCL Clustering', resultMetric, params)
+  print("MCL clustering is over", success)
+  return resultMetric
   
-def writeClusters(graph, grp_metric, prop_to_write, nb_gene_threshold = 10):
+  
+def writeClusters(graph, grp_metric, prop_to_write, nb_gene_threshold = 20):
   clusters = getClusters(graph, grp_metric)
   print(clusters.keys())
   for c in clusters:
@@ -265,7 +284,7 @@ def writeClusters(graph, grp_metric, prop_to_write, nb_gene_threshold = 10):
 def getClusters(graph, metric):
   clusters = {}
   for n in graph.getNodes():
-#    print(metric[n])
+    # le try except peut être vu comme maladroit mais python apprécie particulierement cette structure
     try:
       clusters[metric[n]].append(n)
     except:
@@ -350,15 +369,64 @@ def reinitializeSubgraph(graph, name, clone_name = "clone"):
   tlp.copyToGraph(sub, clone)
   return sub
 
-def createSafecopy(graph, copyname, nametocopy):
-
-  copied_graph = graph.getSubGraph(nametocopy)
+def createCleanCopy(graph, graph_to_copy, copy_name):
   
-  safecopy = graph.addCloneSubGraph(copyname)
-  safecopy.clear()
+  copy = graph.addCloneSubGraph(copy_name)
+  copy.clear()
 
-  tlp.copyToGraph(safecopy, copied_graph)
+  tlp.copyToGraph(copy, graph_to_copy)
+  return copy
 
+
+  
+
+
+def multiLevelClustering(multi_scale_graph, similarity_graph, nodes_cluster, corr_metric, nb_gene_min=20, level_max=3, level=1, group=0):
+  
+  print("level {} groupe {}".format(level, group))
+  
+  #Creation d'un sous graph qui va contenir tous les neouds du cluster
+  similarity_graph.inducedSubGraph(nodes_cluster, multi_scale_graph, name="similarity_level{}_grp{}".format(level, group))
+  graph_lvl = multi_scale_graph.getSubGraph("similarity_level{}_grp{}".format(level, group))
+  
+  # Calcule du seuil pour filtrer les aretes (ici la médiane des aretes de correlation)
+  correlations  = [corr_metric[e] for e in graph_lvl.getEdges()]
+  seuil = median(correlations)
+  print("seuil mediane", seuil)
+  
+  percentile_75 = percentile(correlations, 75)
+  print("percentile 75", percentile_75)
+  
+  
+  # Filtrage des aretes du graph_lvl selon le seuil calculé
+  for e in graph_lvl.getEdges():
+    if corr_metric[e] < seuil:
+      graph_lvl.delEdge(e)
+  
+  # Etape de Partionnement
+  metric = clusteringMCL(graph_lvl, weight_prop=corr_metric)
+  
+  # Recupération des groupes définit par MCL
+  clusters = getClusters(graph_lvl, metric)
+  
+  # Si la clusteriastion n'a renvoyé qu'un seul cluster on stope la clusterisation
+  if len(clusters) == 1 or level >= level_max:
+    clusters["len"] = graph_lvl.numberOfNodes()
+    return clusters
+  
+  #Recursion de la fonction sur chaque nouveau groupe si le nombre de genes est suffisant
+  for c in clusters:
+    if len(clusters[c]) >= nb_gene_min:
+      clusters[c] = multiLevelClustering(graph_lvl, similarity_graph, nodes_cluster=clusters[c], level=level+1, group=int(c), corr_metric=corr_metric)
+    
+   
+ 
+  print(clusters)
+  
+  #A la fin on retourne clusters qui correspond à un dictionnaire multi echel
+  clusters["len"] = graph_lvl.numberOfNodes()
+  return clusters
+  
   
 
 def main(graph): 
@@ -411,8 +479,13 @@ def main(graph):
 
 #  correlation = graph.addCloneSubGraph("correlation")
   
-  working = reinitializeSubgraph(graph, "working")
-  heatmap = reinitializeSubgraph(graph, "heatmap")
+#  working = reinitializeSubgraph(graph, "working")
+#  heatmap = reinitializeSubgraph(working, "heatmap")
+  working = graph.getSubGraph("working")
+  
+  
+
+
   #graph_working = graph.delSubGraph(graph_working)
   #working = graph.addCloneSubGraph("working")
   #correlation = graph.getSubGraph("correlation")
@@ -424,18 +497,53 @@ def main(graph):
   changeEdge(working, Negative, Positive, viewColor)
   NodePosition(working, viewLayout)
     
+  #  similarity = reinitializeSubgraph(graph, "similarity")
+  
+  # Utilisation de la fonction jackknife pour le calcule de correlation
+  similarityFct=jackknife
+  
+  if graph.getSubGraph("similarity") is None:
     
-  cosineScipy = spatial.distance.cosine
+    print("creation of similarity subGraph")
+    
+    similarity = graph.addCloneSubGraph("similarity")
+    
+    print("Computation of similarity among genes")
+    computeSimilarity(similarity, all_tp, similarityFct)
+    
+  else:
+    similarity = graph.getSubGraph('similarity')
+  
+  if graph.getSubGraph("similarity_multi_scale") is None:
+    multi_scale = graph.addCloneSubGraph('similarity_multi_scale')
+    multi_scale.clear() # netoyage de multi_scale graph car on a pas besoin de ses nodes et edges 
+  
+  else:
+    multi_scale  = graph.getSubGraph("similarity_multi_scale")
+  
+  all_nodes = list(similarity.getNodes()) #pour le premier niveau de partionnement tout les neouds sont requis
+  correlation_prop = similarity.getDoubleProperty("correlation_{}".format(similarityFct.__name__))
+  
+  multiLevelClustering(multi_scale, similarity, nodes_cluster=all_nodes, corr_metric=correlation_prop)
+  
+  
 
-#  correlation_graph = geneClustering(graph, all_tp, similarityFct=jackknife,  seuils = [0.4,0.5,0.6,0.7,0.8])
+  
+  
+  
+  
+    
+#  cosineScipy = spatial.distance.cosine
+
+#  correlation_graph = geneClustering(graph, all_tp, similarityFct=jackknife)
   
 #  correlation_graph = geneClustering(graph, all_tp, similarityFct=cosineSimilarity,  seuils = [0, 0.5, 0.8, 0.95, 0.99, 0.98, 0.995])
   
-  correlation_graph = geneClustering(graph, all_tp, similarityFct=cosineSimilarity,  seuil=0.8)
+#  correlation_graph = geneClustering(graph, all_tp, similarityFct=cosineSimilarity,  seuil=0.8)
   
   
   
-  correlation_graph = graph.getSubGraph("correlation_jackknife")
+#  correlation_graph = graph.getSubGraph("correlation_jackknife")
 
 #  
 #  seuils = [0.8]  #[0, 0.5, 0.8, 0.95, 0.99, 0.98, 0.995]
@@ -447,18 +555,14 @@ def main(graph):
 
 #  clusteringMCL(graph, similarity_prop)
 
-  cluster_metric = correlation_graph.getDoubleProperty("resultMetric_0.8")
+#  cluster_metric = correlation_graph.getDoubleProperty("resultMetric_0.8")
 
 #  buildHeatMap(correlation_graph, heatmap, all_tp, cluster_metric)
   
   
   
-  writeClusters(correlation_graph, cluster_metric, Locus)
+#  writeClusters(correlation_graph, cluster_metric, Locus)
   
-  fl = open("test.txt", "w")
-  
-  
-  fl.write("")
   print('end')
   #working = graph.addCloneSubGraph("working")
   #clone = graph.addCloneSubGraph("clone")
