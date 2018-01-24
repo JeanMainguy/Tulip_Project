@@ -257,13 +257,13 @@ def pearson(v1, v2, jk_flag = False):
   return numerator/denominator
 
 
-def clusteringMCL(graph, weight_prop):
+def clusteringMCL(graph, weight_prop, result_name):
   params = tlp.getDefaultPluginParameters('MCL Clustering', graph)
   
   params['weights'] = weight_prop
 
   
-  resultMetric = graph.getDoubleProperty('cluster')
+  resultMetric = graph.getDoubleProperty(result_name)
   print("MCL clustering start")
   success = graph.applyDoubleAlgorithm('MCL Clustering', resultMetric, params)
   print("MCL clustering is over", success)
@@ -358,6 +358,7 @@ def buildHeatMap(graph, heatmap, all_tp, cluster_metric):
      
 def reinitializeSubgraph(graph, name, clone_name = "clone"):
   
+  
   if graph.getSubGraph(name) is None:
     print("creation of {} subGraph".format(name))
     sub = graph.addCloneSubGraph(name)
@@ -378,7 +379,24 @@ def createCleanCopy(graph, graph_to_copy, copy_name):
   return copy
 
 
-  
+def getMultiScaleClusters(graph, grp_prop_name, lvl=1, grp=0):
+  print(grp_prop_name+str(lvl))
+  grp_prop = graph.getDoubleProperty(grp_prop_name+str(lvl))
+  clusters = getClusters(graph, grp_prop)
+  print('nb cluster', len(clusters))
+  lvl += 1
+  for c in clusters:
+    print(c)
+    subgraph_name = "similarity_level{}_grp{}".format(lvl, int(c))
+    if graph.getSubGraph(subgraph_name) is not None:
+      print(subgraph_name, 'exists!!')
+      next_lvl_graph = graph.getSubGraph(subgraph_name)
+      print(next_lvl_graph)
+      clusters[c] = getMultiScaleClusters(next_lvl_graph, grp_prop_name, lvl=lvl, grp=int(c))
+    else:
+      print(subgraph_name, 'does not exist!!')
+  clusters['len'] =  graph.numberOfNodes()
+  return clusters
 
 
 def multiLevelClustering(multi_scale_graph, similarity_graph, nodes_cluster, corr_metric, nb_gene_min=20, level_max=3, level=1, group=0):
@@ -389,6 +407,7 @@ def multiLevelClustering(multi_scale_graph, similarity_graph, nodes_cluster, cor
   similarity_graph.inducedSubGraph(nodes_cluster, multi_scale_graph, name="similarity_level{}_grp{}".format(level, group))
   graph_lvl = multi_scale_graph.getSubGraph("similarity_level{}_grp{}".format(level, group))
   
+
   # Calcule du seuil pour filtrer les aretes (ici la médiane des aretes de correlation)
   correlations  = [corr_metric[e] for e in graph_lvl.getEdges()]
   seuil = median(correlations)
@@ -402,9 +421,13 @@ def multiLevelClustering(multi_scale_graph, similarity_graph, nodes_cluster, cor
   for e in graph_lvl.getEdges():
     if corr_metric[e] < seuil:
       graph_lvl.delEdge(e)
+      
+#  
+#  # copy du graph level pour garder les info à chaque niveau et pour chaque groupe - permet de reconstruire le dico imbriqué à posteriori 
+#  graph_lvl_copy = multi_scale_graph.getSubGraph("similarity_level{}_grp{}_copy".format(level, group))
   
   # Etape de Partionnement
-  metric = clusteringMCL(graph_lvl, weight_prop=corr_metric)
+  metric = clusteringMCL(graph_lvl, weight_prop=corr_metric, result_name = 'cluster_level{}'.format(level))
   
   # Recupération des groupes définit par MCL
   clusters = getClusters(graph_lvl, metric)
@@ -524,8 +547,18 @@ def main(graph):
   all_nodes = list(similarity.getNodes()) #pour le premier niveau de partionnement tout les neouds sont requis
   correlation_prop = similarity.getDoubleProperty("correlation_{}".format(similarityFct.__name__))
   
-  multiLevelClustering(multi_scale, similarity, nodes_cluster=all_nodes, corr_metric=correlation_prop)
-  
+#  multiLevelClustering(multi_scale, similarity, nodes_cluster=all_nodes, corr_metric=correlation_prop)
+
+  if multi_scale.getSubGraph("similarity_level1_grp0") is None:
+    print("multiLevelClustering in progress..")
+    lvls_clusters = multiLevelClustering(multi_scale, similarity, nodes_cluster=all_nodes, corr_metric=correlation_prop)
+  else:
+    #Pour ne pas se coltiner l'étape de clustering et juste recupéré le dico imbriqué des différent niveau de partionnement
+    print('getMultiScaleClsuters in progress... retrieval of the  multi level clusters from the graphs')
+    graph_lvl1_grp0 = multi_scale.getSubGraph("similarity_level1_grp0")
+    cluster_propriety = "cluster_level"
+    lvls_clusters = getMultiScaleClusters(graph_lvl1_grp0, cluster_propriety, lvl=1, grp=0)
+    print(lvls_clusters)
   
 
   
